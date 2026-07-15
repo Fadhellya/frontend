@@ -1,0 +1,119 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: build-{{ repo_name }}-{{ revision }}
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[push]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    pipelinesascode.tekton.dev/max-keep-runs: "3"
+spec:
+  params:
+    - name: repo_url
+      value: "{{ repo_url }}"
+    - name: revision
+      value: "{{ revision }}"
+    - name: app
+      value: "{{ repo_name }}"
+  pipelineSpec:
+    params:
+      - name: repo_url
+      - name: revision
+      - name: app
+    workspaces:
+      - name: source
+      - name: basic-auth
+        optional: true
+      - name: gitops-auth
+    tasks:
+      - name: fetch
+        taskRef:
+          resolver: cluster
+          params:
+            - name: kind
+              value: task
+            - name: name
+              value: git-clone
+            - name: namespace
+              value: openshift-pipelines
+        params:
+          - name: URL
+            value: $(params.repo_url)
+          - name: REVISION
+            value: $(params.revision)
+          - name: SSL_VERIFY
+            value: "false"
+        workspaces:
+          - name: output
+            workspace: source
+          - name: basic-auth
+            workspace: basic-auth
+      - name: build
+        runAfter: [fetch]
+        taskRef:
+          resolver: cluster
+          params:
+            - name: kind
+              value: task
+            - name: name
+              value: buildah
+            - name: namespace
+              value: openshift-pipelines
+        params:
+          - name: IMAGE
+            value: image-registry.openshift-image-registry.svc:5000/virtus-shop-apps/$(params.app):$(params.revision)
+          - name: TLS_VERIFY
+            value: "false"
+          - name: BUILD_ARGS
+            value:
+              - REVISION=$(params.revision)
+              - VERSION=$(params.revision)
+        workspaces:
+          - name: source
+            workspace: source
+      - name: update-gitops
+        runAfter: [build]
+        taskRef:
+          resolver: cluster
+          params:
+            - name: kind
+              value: task
+            - name: name
+              value: git-cli
+            - name: namespace
+              value: openshift-pipelines
+        params:
+          - name: GIT_USER_NAME
+            value: tekton-pipeline
+          - name: GIT_USER_EMAIL
+            value: tekton@virtus.corp
+          - name: SSL_VERIFY
+            value: "false"
+          - name: GIT_SCRIPT
+            value: |
+              set -e
+              rm -rf gitops
+              git clone -c http.sslVerify=false https://gitlab.virtus.corp/virtus-shop/gitops.git
+              cd gitops
+              sed -i "s|newTag: .*|newTag: $(params.revision)|" apps/$(params.app)/kustomization.yaml
+              git add apps/$(params.app)/kustomization.yaml
+              git -c http.sslVerify=false commit -m "ci: $(params.app) image -> $(params.revision)" || echo "no change"
+              git -c http.sslVerify=false push origin main
+        workspaces:
+          - name: source
+            workspace: source
+          - name: basic-auth
+            workspace: gitops-auth
+  workspaces:
+    - name: source
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 1Gi
+    - name: basic-auth
+      secret:
+        secretName: "{{ git_auth_secret }}"
+    - name: gitops-auth
+      secret:
+        secretName: gitlab-push-creds
