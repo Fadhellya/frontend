@@ -18,4 +18,4 @@ WORKDIR /home/app
 COPY --from=builder /podinfo/bin/podinfo .
 COPY ./ui ./ui
 USER app
-CMD ["./podinfo", "--random-error"]
+CMD ["./podinfo"]
