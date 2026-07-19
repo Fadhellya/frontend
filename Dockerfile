@@ -19,4 +19,4 @@ COPY --from=builder /out/podinfo .
 COPY --from=builder /src/ui ./ui
 USER app
 EXPOSE 9898
-CMD ["./podinfo"]
+CMD ["./podinfo", "--random-error"]
